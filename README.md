@@ -1,3 +1,4 @@
+
 # Transformer & LoRA Implementation from Scratch 
 ### [🇯🇵 日本語](#日本語-japanese) | [🇺🇸 English](#english)
 
@@ -51,11 +52,16 @@ pip install torch numpy
 ├── src/
 │   ├── layers/
 │   │   ├── attention.py  <-- Multi-Head Attention (手動計算と高速化の実装)
-│   │   ├── lora.py       <-- LoRAレイヤー (Freeze済み重み + アダプター)
-│   │   └── ...
+│   │   ├── lora.py       <-- LoRA Layer implementation (Freeze済み重み + アダプター)
+│   │   ├── ffn.py        <-- Position-wise Feed-Forward
+│   │   └── embeddings.py <-- Positional Encoding
 │   ├── models/
-│   │   └── transformer.py <-- モデル全体統合
+│   │   ├── transformer.py <-- モデル全体統合
+│   │   ├── encoder.py
+│   │   └── decoder.py
 │   └── utils/
+│       ├── device.py
+│       └── masking.py    <-- マスク生成ロジック
 ├── train.py
 └── README.md
 ```
@@ -64,32 +70,72 @@ pip install torch numpy
 
 ### モデルの初期化と実行
 
-`Transformer` クラスを呼び出し、LoRAランクを指定することで自動的にアダプターが適用されます。
+`train.py` の実コードに基づく実行フローです。
+デバイス判定、ハイパーパラメータ設定、LoRA適用モデルの構築、そして学習ステップ（順伝播・逆伝播）のシミュレーションまでを行います。
 
 ```python
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from src.models.transformer import Transformer
+from src.utils.device import get_device
 
-# 1. モデルの初期化 (LoRAランク指定により自動で適用)
+# 1. デバイスの取得
+device = get_device()
+print(f"Device: {device}")
+
+# 2. ハイパーパラメータ設定
+SRC_VOCAB_SIZE = 1000
+TRG_VOCAB_SIZE = 1000
+D_MODEL = 64  # デモ用に小さく
+BATCH_SIZE = 2
+SEQ_LEN = 10
+
+# 3. モデルの初期化 (LoRAの設定あり)
+print("\nInitializing Model...")
 model = Transformer(
-    src_vocab_size=5000,
-    tgt_vocab_size=5000,
-    d_model=512,
-    n_head=8,
-    num_encoder_layers=6,
-    num_decoder_layers=6,
-    lora_rank=8  # LoRAを注入
-)
+    src_vocab_size=SRC_VOCAB_SIZE,
+    trg_vocab_size=TRG_VOCAB_SIZE,
+    pad_idx=0,
+    d_model=D_MODEL,
+    N=2,           # 層数
+    num_heads=2,   # ヘッド数
+    lora_targets=["attn_query", "attn_value"], # LoRAを適用
+    lora_rank=4
+).to(device)
 
-# 2. ダミーデータの入力 (Batch Size, Seq Len)
-src = torch.randint(0, 5000, (1, 10))
-tgt = torch.randint(0, 5000, (1, 10))
+# パラメータ数の確認
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"Model on {device}")
+print(f"Total Params: {total_params:,}")
+print(f"Trainable Params (LoRA only): {trainable_params:,}")
 
-# 3. Forward pass
-output = model(src, tgt)
-print(f"Output Shape: {output.shape}") # torch.Size([1, 10, 5000])
+# 4. ダミーデータ作成
+src = torch.randint(1, SRC_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+trg = torch.randint(1, TRG_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+
+# 5. 順伝播 (Forward)
+print("\nRunning Forward Pass...")
+logits = model(src, trg)
+print(f"Output Shape: {logits.shape}") # (B, L, Vocab)
+
+# 6. 逆伝播 (Backward) - 学習ループのシミュレーション
+print("Running Backward Pass (Training Step)...")
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+
+# 損失計算 (ダミーの正解ラベル)
+labels = torch.randint(1, TRG_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+loss = criterion(logits.view(-1, TRG_VOCAB_SIZE), labels.view(-1))
+
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+
+print(f"Success! Loss: {loss.item():.4f}")
+print("\nすべてのモジュールが正常に連携しています。")
 ```
-
 ## 5\. 実装の詳細と開発プロセス
 
 ### 主要コンポーネント
@@ -160,46 +206,91 @@ This script assumes the following directory structure:
 .
 ├── src/
 │   ├── layers/
-│   │   ├── attention.py  <-- Multi-Head Attention (Manual & Fast imp.)
+│   │   ├── attention.py  <-- Multi-Head Attention
 │   │   ├── lora.py       <-- LoRA Layer implementation
-│   │   └── ...
+│   │   ├── ffn.py        <-- Position-wise Feed-Forward
+│   │   └── embeddings.py <-- Positional Encoding
 │   ├── models/
-│   │   └── transformer.py <-- Integrated Model
+│   │   ├── transformer.py <-- Integrated Model
+│   │   ├── encoder.py
+│   │   └── decoder.py
 │   └── utils/
+│       ├── device.py
+│       └── masking.py    <-- Create Mask
 ├── train.py
 └── README.md
+
 ```
 
-## 4\. Usage
+## 4. Usage
 
 ### Model Initialization and Execution
 
-Initialize the `Transformer` class and specify the LoRA rank to automatically apply adapters.
+Based on the actual code in `simple_train.py`, this demonstrates the full flow: device detection, hyperparameter setup, LoRA model construction, and a simulated training step (Forward/Backward).
 
 ```python
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from src.models.transformer import Transformer
+from src.utils.device import get_device
 
-# 1. Initialize model with LoRA
+# 1. Get Device
+device = get_device()
+print(f"Device: {device}")
+
+# 2. Hyperparameter Settings
+SRC_VOCAB_SIZE = 1000
+TRG_VOCAB_SIZE = 1000
+D_MODEL = 64  # Small size for demo
+BATCH_SIZE = 2
+SEQ_LEN = 10
+
+# 3. Initialize Model (With LoRA)
+print("\nInitializing Model...")
 model = Transformer(
-    src_vocab_size=5000,
-    tgt_vocab_size=5000,
-    d_model=512,
-    n_head=8,
-    num_encoder_layers=6,
-    num_decoder_layers=6,
-    lora_rank=8  # Inject LoRA
-)
+    src_vocab_size=SRC_VOCAB_SIZE,
+    trg_vocab_size=TRG_VOCAB_SIZE,
+    pad_idx=0,
+    d_model=D_MODEL,
+    N=2,           # Number of layers
+    num_heads=2,   # Number of heads
+    lora_targets=["attn_query", "attn_value"], # Apply LoRA
+    lora_rank=4
+).to(device)
 
-# 2. Dummy Input (Batch Size, Seq Len)
-src = torch.randint(0, 5000, (1, 10))
-tgt = torch.randint(0, 5000, (1, 10))
+# Check Parameters
+total_params = sum(p.numel() for p in model.parameters())
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+print(f"Model on {device}")
+print(f"Total Params: {total_params:,}")
+print(f"Trainable Params (LoRA only): {trainable_params:,}")
 
-# 3. Forward pass
-output = model(src, tgt)
-print(f"Output Shape: {output.shape}") # torch.Size([1, 10, 5000])
+# 4. Create Dummy Data
+src = torch.randint(1, SRC_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+trg = torch.randint(1, TRG_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+
+# 5. Forward Pass
+print("\nRunning Forward Pass...")
+logits = model(src, trg)
+print(f"Output Shape: {logits.shape}") # (B, L, Vocab)
+
+# 6. Backward Pass (Simulated Training Step)
+print("Running Backward Pass (Training Step)...")
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(model.parameters(), lr=1e-3)
+
+# Calculate Loss (Dummy Labels)
+labels = torch.randint(1, TRG_VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN)).to(device)
+loss = criterion(logits.view(-1, TRG_VOCAB_SIZE), labels.view(-1))
+
+optimizer.zero_grad()
+loss.backward()
+optimizer.step()
+
+print(f"Success! Loss: {loss.item():.4f}")
+print("\nAll modules are working correctly.")
 ```
-
 ## 5\. Implementation Details & Process
 
 ### Core Components
